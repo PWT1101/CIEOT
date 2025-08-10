@@ -3,17 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CIEOT（極簡版／支援無欄名 CSV）</title>
+  <title>CIEOT（極簡版／多 CSV 切換／固定表頭）</title>
   <style>
     body{font-family:"Microsoft JhengHei",Arial,system-ui; margin:0; background:#f7f7f8;}
     .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
     h1{font-size:24px; margin:0 0 12px;}
     .toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px;}
-    input[type="text"]{flex:1 1 260px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px;}
+    input[type="text"], select{flex:1 1 240px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px;}
     button{padding:8px 10px; border:1px solid #e5e7eb; background:#fff; border-radius:8px; cursor:pointer}
     button:hover{border-color:#d1d5db}
-    label{user-select:none}
-    table{width:100%; border-collapse:collapse; background:#fff; border:1px solid #e5e7eb;}
+    table{width:100%; border-collapse:collapse; background:#fff; border:1px solid #e5e7eb; table-layout:fixed;} thead th, tbody td{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;} 
     thead th{background:#fafafa; border-bottom:1px solid #e5e7eb; text-align:left; padding:10px;}
     tbody td{border-top:1px solid #f0f0f0; padding:10px; vertical-align:top;}
     tbody tr:nth-child(even){background:#eee;}
@@ -24,21 +23,36 @@
   <div class="wrap">
     <h1>CIEOT（CSV 讀取／可選字）</h1>
     <div class="toolbar">
+      <select id="csvSelector" title="選擇要載入的 CSV 檔"></select>
       <input id="q" type="text" placeholder="關鍵字搜尋（全欄位）…">
       <button id="clear">清除</button>
       <button id="reload">重新載入</button>
-      <label><input type="checkbox" id="cb-header"> 第一列是欄名</label>
+      <button id="copyLink">複製本檔連結</button>
     </div>
     <div style="overflow:auto; max-height:75vh; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.04)">
       <table id="tbl"><thead></thead><tbody></tbody></table>
     </div>
-    <p class="hint">你的 CSV 若<strong>沒有欄名</strong>（第一列直接是資料），請不要勾選「第一列是欄名」。系統會自動以 A、B、C… 作為表頭；最前面會加入 # 編號欄。</p>
+    <p class="hint">表頭固定為：<strong>No.／單字+音標／中文解釋／類別</strong>。CSV 第一列直接是資料（無欄名）。若你的 CSV 欄位超過三欄，額外欄位將以「欄位4、欄位5…」自動命名。</p>
   </div>
 
   <script>
-    const CSV_PATH = 'data.csv';
-    let HEADER_MODE = false; // 預設：第一列不是欄名
+    // ===== 1) 產生可切換的 CSV 清單：Voc1_1.csv, Voc1_2.csv, …, Voc30_1.csv, Voc30_2.csv =====
+    const FILES = (function(){ const arr=[]; for(let i=1;i<=30;i++){ arr.push(`Voc${i}_1.csv`, `Voc${i}_2.csv`);} return arr; })();
 
+    // ===== 2) 工具函式 =====
+    function getParam(name){ return new URLSearchParams(location.search).get(name); }
+    function normalizeCSV(name){ if(!name) return ''; return /\.csv$/i.test(name)? name : (name+='.csv'); }
+
+    let currentCSV = normalizeCSV(getParam('file')) || (localStorage.getItem('csv:file') || FILES[0]);
+
+    function populateSelector(){
+      const sel = document.getElementById('csvSelector'); sel.innerHTML = '';
+      FILES.forEach(f=>{ const opt=document.createElement('option'); opt.value=f; opt.textContent=f; sel.appendChild(opt); });
+      if(!FILES.includes(currentCSV)) { const opt=document.createElement('option'); opt.value=currentCSV; opt.textContent=currentCSV; sel.prepend(opt);} 
+      sel.value = currentCSV;
+    }
+
+    // ===== 3) CSV 解析（支援引號、逗號、換行） =====
     function parseCSV(text){
       const rows=[]; let row=[]; let cell=''; let inQ=false;
       for(let i=0;i<text.length;i++){
@@ -59,47 +73,50 @@
       return rows.filter(r=>r.length && !(r.length===1 && r[0]===''));
     }
 
-    async function load(){
-      const res = await fetch(CSV_PATH, {cache:'no-store'});
-      if(!res.ok) throw new Error('讀取失敗 '+res.status);
+    // ===== 4) 載入與渲染 =====
+    async function load(fileName){
+      if(fileName) currentCSV = normalizeCSV(fileName);
+      localStorage.setItem('csv:file', currentCSV);
+      const res = await fetch(currentCSV, {cache:'no-store'});
+      if(!res.ok) throw new Error('讀取失敗 '+res.status+'（'+currentCSV+'）');
       const text = await res.text();
       const rows = parseCSV(text);
       render(rows);
       window.__rows = rows;
     }
 
-    function letters(n){ // 0->A, 1->B, ... 25->Z, 26->AA
-      let s=''; n = Math.floor(n);
-      do{ s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n/26) - 1; }while(n>=0);
-      return s;
-    }
-
     function render(rows){
+      const table=document.getElementById('tbl');
       const thead=document.querySelector('#tbl thead');
       const tbody=document.querySelector('#tbl tbody');
+      // 清空
       thead.innerHTML=''; tbody.innerHTML='';
+      const oldCg = table.querySelector('colgroup'); if(oldCg) oldCg.remove();
       if(!rows.length) return;
 
-      // 產生表頭：最前面加一欄『#』編號
-      const firstRow = rows[0];
-      const colCount = firstRow.length;
-      const headerCells = ['#'];
-      if(HEADER_MODE){
-        // 使用第一列為欄名
-        for(let i=0;i<colCount;i++) headerCells.push(String(firstRow[i]||letters(i)));
-      }else{
-        // 自動 A, B, C...
-        for(let i=0;i<colCount;i++) headerCells.push(letters(i));
-      }
+      // 固定表頭
+      const colCount = rows[0].length; // CSV 的資料欄數
+      const headerCells = ['No.','單字+音標','中文解釋','類別'];
+      for(let i=4;i<colCount+1;i++){ headerCells[i] = '欄位'+(i); }
+
+      // 固定欄寬：No.=64px；其餘前三欄依比例，超出欄位自動（省略號顯示）
+      const cg=document.createElement('colgroup');
+      const c0=document.createElement('col'); c0.style.width='64px'; cg.appendChild(c0);
+      const c1=document.createElement('col'); c1.style.width='44%'; cg.appendChild(c1);
+      const c2=document.createElement('col'); c2.style.width='44%'; cg.appendChild(c2);
+      const c3=document.createElement('col'); c3.style.width='12%'; cg.appendChild(c3);
+      for(let i=4;i<colCount+1;i++){ cg.appendChild(document.createElement('col')); }
+      table.prepend(cg);
+
+      // 表頭列
       const trh=document.createElement('tr');
-      headerCells.forEach(function(h){ const th=document.createElement('th'); th.textContent=h; trh.appendChild(th); });
+      headerCells.forEach(h=>{ const th=document.createElement('th'); th.textContent=h; trh.appendChild(th); });
       thead.appendChild(trh);
 
-      // 內容列：若有欄名模式，資料自第 2 列開始；否則自第 1 列開始
-      const startIndex = HEADER_MODE ? 1 : 0;
-      for(let r=startIndex; r<rows.length; r++){
+      // 內容列：每次渲染都從 1 開始重新計數（切換 CSV / 搜尋都會重算）
+      for(let r=0; r<rows.length; r++){
         const tr=document.createElement('tr');
-        const tdIndex=document.createElement('td'); tdIndex.textContent = (r - startIndex + 1); tr.appendChild(tdIndex);
+        const tdIndex=document.createElement('td'); tdIndex.textContent = (r + 1); tr.appendChild(tdIndex);
         for(let c=0;c<colCount;c++){
           const td=document.createElement('td'); td.textContent = rows[r][c]||''; tr.appendChild(td);
         }
@@ -108,25 +125,23 @@
     }
 
     function search(q){
-      const rows = window.__rows||[];
-      if(!rows.length){return;}
+      const rows = window.__rows||[]; if(!rows.length){return;}
       if(!q){ render(rows); return; }
       const lower=q.toLowerCase();
-      const filtered = rows.filter(function(r, idx){
-        if(HEADER_MODE && idx===0) return true; // 保留標題列
-        return r.some(function(v){ return String(v).toLowerCase().includes(lower); });
-      });
+      const filtered = rows.filter(r => r.some(v=> String(v).toLowerCase().includes(lower)) );
       render(filtered);
     }
 
-    document.getElementById('q').addEventListener('input', function(e){ search(e.target.value); });
-    document.getElementById('clear').addEventListener('click', function(){ var q=document.getElementById('q'); q.value=''; search(''); });
-    document.getElementById('reload').addEventListener('click', function(){ load(); });
-    document.getElementById('cb-header').addEventListener('change', function(e){ HEADER_MODE = e.target.checked; render(window.__rows||[]); });
+    // ===== 5) 綁定事件 =====
+    document.getElementById('q').addEventListener('input', e=> search(e.target.value));
+    document.getElementById('clear').addEventListener('click', ()=>{ const q=document.getElementById('q'); q.value=''; search(''); });
+    document.getElementById('reload').addEventListener('click', ()=> load());
+    document.getElementById('csvSelector').addEventListener('change', e=> load(e.target.value));
+    document.getElementById('copyLink').addEventListener('click', ()=>{ const url = new URL(location.href); url.searchParams.set('file', currentCSV); navigator.clipboard.writeText(url.toString()).then(()=>alert('已複製：\n'+url)); });
 
-    load().catch(function(err){
-      alert('載入 data.csv 失敗：'+err.message+'\n請確認檔案存在且為 UTF-8 編碼。');
-    });
+    // ===== 6) 啟動 =====
+    populateSelector();
+    load(currentCSV).catch(err=>{ alert('載入 CSV 失敗：'+err.message+'\n請確認檔案存在且為 UTF-8 編碼。'); });
   </script>
 </body>
 </html>
