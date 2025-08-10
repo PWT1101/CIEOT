@@ -3,18 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CIEOT（極簡版）</title>
+  <title>CIEOT（極簡版／支援無欄名 CSV）</title>
   <style>
     body{font-family:"Microsoft JhengHei",Arial,system-ui; margin:0; background:#f7f7f8;}
     .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
     h1{font-size:24px; margin:0 0 12px;}
-    .toolbar{display:flex; gap:8px; align-items:center; margin:0 0 12px;}
+    .toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 12px;}
     input[type="text"]{flex:1 1 260px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px;}
     button{padding:8px 10px; border:1px solid #e5e7eb; background:#fff; border-radius:8px; cursor:pointer}
     button:hover{border-color:#d1d5db}
+    label{user-select:none}
     table{width:100%; border-collapse:collapse; background:#fff; border:1px solid #e5e7eb;}
-    thead th{position:sticky; top:0; background:#fafafa; border-bottom:1px solid #e5e7eb; text-align:left; padding:10px;}
-    tbody td{border-top:1px solid #f0f0f0; padding:10px;}
+    thead th{background:#fafafa; border-bottom:1px solid #e5e7eb; text-align:left; padding:10px;}
+    tbody td{border-top:1px solid #f0f0f0; padding:10px; vertical-align:top;}
+    tbody tr:nth-child(even){background:#eee;}
     .hint{font-size:12px; color:#6b7280; margin:8px 0 0}
   </style>
 </head>
@@ -25,17 +27,18 @@
       <input id="q" type="text" placeholder="關鍵字搜尋（全欄位）…">
       <button id="clear">清除</button>
       <button id="reload">重新載入</button>
+      <label><input type="checkbox" id="cb-header"> 第一列是欄名</label>
     </div>
     <div style="overflow:auto; max-height:75vh; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.04)">
       <table id="tbl"><thead></thead><tbody></tbody></table>
     </div>
-    <p class="hint">請確保 <code>data.csv</code> 為 <strong>UTF-8</strong> 編碼且第一列是欄位名稱。將本檔與 <code>data.csv</code> 放在同資料夾即可。</p>
+    <p class="hint">你的 CSV 若<strong>沒有欄名</strong>（第一列直接是資料），請不要勾選「第一列是欄名」。系統會自動以 A、B、C… 作為表頭；最前面會加入 # 編號欄。</p>
   </div>
 
   <script>
     const CSV_PATH = 'data.csv';
+    let HEADER_MODE = false; // 預設：第一列不是欄名
 
-    // 簡易 CSV 解析（支援雙引號、逗號、換行）
     function parseCSV(text){
       const rows=[]; let row=[]; let cell=''; let inQ=false;
       for(let i=0;i<text.length;i++){
@@ -48,7 +51,7 @@
           if(ch==='"'){ inQ=true; }
           else if(ch===','){ row.push(cell); cell=''; }
           else if(ch==='\n'){ row.push(cell); rows.push(row); row=[]; cell=''; }
-          else if(ch==='\r'){ /* skip */ }
+          else if(ch==='\r'){ }
           else { cell+=ch; }
         }
       }
@@ -62,7 +65,13 @@
       const text = await res.text();
       const rows = parseCSV(text);
       render(rows);
-      window.__rows = rows; // for search
+      window.__rows = rows;
+    }
+
+    function letters(n){ // 0->A, 1->B, ... 25->Z, 26->AA
+      let s=''; n = Math.floor(n);
+      do{ s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n/26) - 1; }while(n>=0);
+      return s;
     }
 
     function render(rows){
@@ -70,14 +79,31 @@
       const tbody=document.querySelector('#tbl tbody');
       thead.innerHTML=''; tbody.innerHTML='';
       if(!rows.length) return;
-      const headers=rows[0];
-      const tr=document.createElement('tr');
-      headers.forEach(h=>{ const th=document.createElement('th'); th.textContent=h; tr.appendChild(th); });
-      thead.appendChild(tr);
-      for(let i=1;i<rows.length;i++){
-        const trb=document.createElement('tr');
-        rows[i].forEach(v=>{ const td=document.createElement('td'); td.textContent=v; trb.appendChild(td); });
-        tbody.appendChild(trb);
+
+      // 產生表頭：最前面加一欄『#』編號
+      const firstRow = rows[0];
+      const colCount = firstRow.length;
+      const headerCells = ['#'];
+      if(HEADER_MODE){
+        // 使用第一列為欄名
+        for(let i=0;i<colCount;i++) headerCells.push(String(firstRow[i]||letters(i)));
+      }else{
+        // 自動 A, B, C...
+        for(let i=0;i<colCount;i++) headerCells.push(letters(i));
+      }
+      const trh=document.createElement('tr');
+      headerCells.forEach(function(h){ const th=document.createElement('th'); th.textContent=h; trh.appendChild(th); });
+      thead.appendChild(trh);
+
+      // 內容列：若有欄名模式，資料自第 2 列開始；否則自第 1 列開始
+      const startIndex = HEADER_MODE ? 1 : 0;
+      for(let r=startIndex; r<rows.length; r++){
+        const tr=document.createElement('tr');
+        const tdIndex=document.createElement('td'); tdIndex.textContent = (r - startIndex + 1); tr.appendChild(tdIndex);
+        for(let c=0;c<colCount;c++){
+          const td=document.createElement('td'); td.textContent = rows[r][c]||''; tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
       }
     }
 
@@ -86,15 +112,19 @@
       if(!rows.length){return;}
       if(!q){ render(rows); return; }
       const lower=q.toLowerCase();
-      const filtered=[rows[0]].concat(rows.slice(1).filter(r=> r.some(v=> String(v).toLowerCase().includes(lower)) ));
+      const filtered = rows.filter(function(r, idx){
+        if(HEADER_MODE && idx===0) return true; // 保留標題列
+        return r.some(function(v){ return String(v).toLowerCase().includes(lower); });
+      });
       render(filtered);
     }
 
-    document.getElementById('q').addEventListener('input', e=> search(e.target.value));
-    document.getElementById('clear').addEventListener('click', ()=>{ const q=document.getElementById('q'); q.value=''; search(''); });
-    document.getElementById('reload').addEventListener('click', ()=> load());
+    document.getElementById('q').addEventListener('input', function(e){ search(e.target.value); });
+    document.getElementById('clear').addEventListener('click', function(){ var q=document.getElementById('q'); q.value=''; search(''); });
+    document.getElementById('reload').addEventListener('click', function(){ load(); });
+    document.getElementById('cb-header').addEventListener('change', function(e){ HEADER_MODE = e.target.checked; render(window.__rows||[]); });
 
-    load().catch(err=>{
+    load().catch(function(err){
       alert('載入 data.csv 失敗：'+err.message+'\n請確認檔案存在且為 UTF-8 編碼。');
     });
   </script>
