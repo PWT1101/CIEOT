@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CIEOT（極簡版）</title>
+  <style>
+    body{font-family:"Microsoft JhengHei",Arial,system-ui; margin:0; background:#f7f7f8;}
+    .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
+    h1{font-size:24px; margin:0 0 12px;}
+    .toolbar{display:flex; gap:8px; align-items:center; margin:0 0 12px;}
+    input[type="text"]{flex:1 1 260px; padding:8px 10px; border:1px solid #e5e7eb; border-radius:8px;}
+    button{padding:8px 10px; border:1px solid #e5e7eb; background:#fff; border-radius:8px; cursor:pointer}
+    button:hover{border-color:#d1d5db}
+    table{width:100%; border-collapse:collapse; background:#fff; border:1px solid #e5e7eb;}
+    thead th{position:sticky; top:0; background:#fafafa; border-bottom:1px solid #e5e7eb; text-align:left; padding:10px;}
+    tbody td{border-top:1px solid #f0f0f0; padding:10px;}
+    .hint{font-size:12px; color:#6b7280; margin:8px 0 0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>CIEOT（CSV 讀取／可選字）</h1>
+    <div class="toolbar">
+      <input id="q" type="text" placeholder="關鍵字搜尋（全欄位）…">
+      <button id="clear">清除</button>
+      <button id="reload">重新載入</button>
+    </div>
+    <div style="overflow:auto; max-height:75vh; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.04)">
+      <table id="tbl"><thead></thead><tbody></tbody></table>
+    </div>
+    <p class="hint">請確保 <code>data.csv</code> 為 <strong>UTF-8</strong> 編碼且第一列是欄位名稱。將本檔與 <code>data.csv</code> 放在同資料夾即可。</p>
+  </div>
+
+  <script>
+    const CSV_PATH = 'data.csv';
+
+    // 簡易 CSV 解析（支援雙引號、逗號、換行）
+    function parseCSV(text){
+      const rows=[]; let row=[]; let cell=''; let inQ=false;
+      for(let i=0;i<text.length;i++){
+        const ch=text[i], nxt=text[i+1];
+        if(inQ){
+          if(ch==='"' && nxt==='"'){ cell+='"'; i++; }
+          else if(ch==='"'){ inQ=false; }
+          else { cell+=ch; }
+        }else{
+          if(ch==='"'){ inQ=true; }
+          else if(ch===','){ row.push(cell); cell=''; }
+          else if(ch==='\n'){ row.push(cell); rows.push(row); row=[]; cell=''; }
+          else if(ch==='\r'){ /* skip */ }
+          else { cell+=ch; }
+        }
+      }
+      if(cell!=='' || row.length){ row.push(cell); rows.push(row); }
+      return rows.filter(r=>r.length && !(r.length===1 && r[0]===''));
+    }
+
+    async function load(){
+      const res = await fetch(CSV_PATH, {cache:'no-store'});
+      if(!res.ok) throw new Error('讀取失敗 '+res.status);
+      const text = await res.text();
+      const rows = parseCSV(text);
+      render(rows);
+      window.__rows = rows; // for search
+    }
+
+    function render(rows){
+      const thead=document.querySelector('#tbl thead');
+      const tbody=document.querySelector('#tbl tbody');
+      thead.innerHTML=''; tbody.innerHTML='';
+      if(!rows.length) return;
+      const headers=rows[0];
+      const tr=document.createElement('tr');
+      headers.forEach(h=>{ const th=document.createElement('th'); th.textContent=h; tr.appendChild(th); });
+      thead.appendChild(tr);
+      for(let i=1;i<rows.length;i++){
+        const trb=document.createElement('tr');
+        rows[i].forEach(v=>{ const td=document.createElement('td'); td.textContent=v; trb.appendChild(td); });
+        tbody.appendChild(trb);
+      }
+    }
+
+    function search(q){
+      const rows = window.__rows||[];
+      if(!rows.length){return;}
+      if(!q){ render(rows); return; }
+      const lower=q.toLowerCase();
+      const filtered=[rows[0]].concat(rows.slice(1).filter(r=> r.some(v=> String(v).toLowerCase().includes(lower)) ));
+      render(filtered);
+    }
+
+    document.getElementById('q').addEventListener('input', e=> search(e.target.value));
+    document.getElementById('clear').addEventListener('click', ()=>{ const q=document.getElementById('q'); q.value=''; search(''); });
+    document.getElementById('reload').addEventListener('click', ()=> load());
+
+    load().catch(err=>{
+      alert('載入 data.csv 失敗：'+err.message+'\n請確認檔案存在且為 UTF-8 編碼。');
+    });
+  </script>
+</body>
+</html>
